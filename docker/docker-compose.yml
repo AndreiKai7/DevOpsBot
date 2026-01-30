@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  bot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: linux_monitor_bot
+    restart: always
+    env_file:
+      - ../.env 
+    volumes:
+      - /proc:/host/proc:ro
