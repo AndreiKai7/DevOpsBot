@@ -25,6 +25,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     logger.info(f"User {update.effective_user.id} started the bot.")
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает справку по командам."""
+    if not await check_access(update): return
+
+    help_text = (
+        "🤖 *Доступные команды:*\n\n"
+        "🔹 /start - Проверить доступ и запустить бота\n"
+        "🔹 /help - Показать это сообщение\n"
+        "🔹 /status - Общая сводка состояния сервера\n"
+        "🔹 /cpu - Загрузка процессора\n"
+        "🔹 /ram - Использование оперативной памяти\n"
+        "🔹 /disk - Использование дискового пространства\n"
+        "🔹 /uptime - Время работы сервера\n"
+        "🔹 /alerts - Статус активных предупреждений\n\n"
+        "💡 *Совет:* Нажмите на кнопку меню слева от поля ввода для быстрого доступа к командам."
+    )
+    
+    await update.message.reply_text(help_text, parse_mode="Markdown")
+    logger.info(f"User {update.effective_user.id} requested help.")
+
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
 

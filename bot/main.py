@@ -1,14 +1,39 @@
 import asyncio
-from telegram import Update
+from telegram import Update, BotCommand, MenuButtonCommands
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from bot.config import BOT_TOKEN, CHECK_INTERVAL, ALERT_COOLDOWN
+from bot.config import BOT_TOKEN, CHECK_INTERVAL, ALERT_COOLDOWN, TELEGRAM_USER_ID
 from bot.logger import setup_logger
 from bot.handlers import (
-    start, status, cmd_cpu, cmd_ram, cmd_disk, cmd_uptime, alerts_status
+    start, status, cmd_cpu, cmd_ram, cmd_disk, cmd_uptime, alerts_status, help_command
 )
 from bot.alerts import check_alerts
 
 logger = setup_logger()
+
+async def setup_bot_commands(application):
+    """
+    Устанавливает список команд для бота.
+    Это populate и меню по нажатию на '/', и Menu Button (слева от ввода).
+    """
+    commands = [
+        BotCommand("start", "👋 Проверка доступа"),
+        BotCommand("help", "❓ Справка"),
+        BotCommand("status", "📊 Сводка сервера"),
+        BotCommand("cpu", "🖥 Загрузка CPU"),
+        BotCommand("ram", "🧠 Использование RAM"),
+        BotCommand("disk", "💾 Использование диска"),
+        BotCommand("uptime", "⏳ Время работы"),
+        BotCommand("alerts", "🚨 Статус алертов"),
+    ]
+    
+    # Устанавливаем команды, которые появляются при наборе /
+    await application.bot.set_my_commands(commands)
+    
+    # Устанавливаем кнопку меню (Menu Button) слева от поля ввода
+    # При нажатии она показывает список команд, указанных выше
+    await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    
+    logger.info("Bot commands and menu button updated.")
 
 async def alarm_job(context: ContextTypes.DEFAULT_TYPE):
     """Фоновая задача для проверки алертов."""
@@ -29,8 +54,15 @@ def main():
     # Создаем приложение
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # Запускаем настройку команд (асинхронно)
+    # Используем run_coroutine_threadsafe или просто вызываем внутри цикла событий через post_init
+    # Но для простоты в v20 можно сделать так:
+    application.post_init = setup_bot_commands
+    application.post_shutdown = lambda app: logger.info("Bot shutdown.")
+
     # Регистрируем обработчики команд
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command)) # Добавили help
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("cpu", cmd_cpu))
     application.add_handler(CommandHandler("ram", cmd_ram))
@@ -38,9 +70,6 @@ def main():
     application.add_handler(CommandHandler("uptime", cmd_uptime))
     application.add_handler(CommandHandler("alerts", alerts_status))
 
-    # Получаем ID админа для JobQueue (куда слать алерты)
-    from bot.config import TELEGRAM_USER_ID
-    
     # Добавляем задачу в очередь (JobQueue)
     job_queue = application.job_queue
     if job_queue:
