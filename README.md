@@ -57,7 +57,6 @@ server-monitoring-bot/
 cp .env.example .env
 
 Отредактируй `.env`:
-```ini
 BOT_TOKEN=твой_токен_от_botfather
 TELEGRAM_USER_ID=твой_id
 ```
