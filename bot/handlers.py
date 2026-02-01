@@ -3,6 +3,8 @@ from telegram.ext import ContextTypes
 from bot.config import is_authorized, TELEGRAM_USER_ID
 from bot.logger import setup_logger
 from bot.metrics import get_cpu_usage, get_load_avg, get_ram_usage, get_disk_usage, get_uptime
+from bot.graphs import create_pie_chart
+import subprocess
 
 logger = setup_logger()
 
@@ -63,6 +65,89 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏳ Uptime: {uptime}"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
+
+async def graph_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update): return
+
+    await update.message.reply_text("📊 Generating chart... please wait.")
+    
+    try:
+        # Генерируем картинку (это может занять время, в идеале вынести в executor, но пока так)
+        image_buffer = create_pie_chart()
+        
+        # Отправляем фото прямо из буфера памяти
+        await update.message.reply_photo(
+            photo=image_buffer,
+            caption="💾 Current Memory Usage Visualization"
+        )
+        logger.info("Graph sent successfully.")
+    except Exception as e:
+        logger.error(f"Error generating graph: {e}")
+        await update.message.reply_text("❌ Failed to generate graph.")
+
+async def docker_ps(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update): return
+    
+    # Запускаем docker ps как будто мы в консоли
+    try:
+        result = subprocess.run(['docker', 'ps', '--format', 'table {{.Names}}\t{{.Status}}'], 
+                                capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            # Форматируем моноширинным шрифтом для красоты
+            await update.message.reply_text(f"```\n{result.stdout}\n```", parse_mode="Markdown")
+        else:
+            await update.message.reply_text("❌ Error executing docker ps")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def docker_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update): return
+    
+    if not context.args:
+        await update.message.reply_text("Usage: /logs <container_name>")
+        return
+
+    container_name = context.args[0]
+    
+    # Берем последние 20 строк логов
+    try:
+        result = subprocess.run(['docker', 'logs', '--tail', '20', container_name], 
+                                capture_output=True, text=True)
+        
+        # Логи могут быть длинными, но Телеграм вывозит
+        await update.message.reply_text(f"📋 *Logs for {container_name}:*\n```\n{result.stdout}\n```", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not fetch logs: {e}")
+
+async def fix_disk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update): return
+    
+    # Проверяем статус
+    disk = get_disk_usage()
+    if disk['percent'] < 90:
+        await update.message.reply_text("✅ Disk usage is normal. No action needed.")
+        return
+
+    await update.message.reply_text(
+        f"⚠️ Disk is critical ({disk['percent']}%). Attempting to clean Docker cache...\n"
+        f"Running: `docker system prune -f`"
+    )
+
+    try:
+        # Запускаем очистку
+        result = subprocess.run(['docker', 'system', 'prune', '-f'], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            new_disk = get_disk_usage()
+            await update.message.reply_text(
+                f"✅ Cleanup complete!\n"
+                f"Space reclaimed. New disk usage: {new_disk['percent']}%"
+            )
+        else:
+            await update.message.reply_text("❌ Cleanup failed.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
 
 async def cmd_cpu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
