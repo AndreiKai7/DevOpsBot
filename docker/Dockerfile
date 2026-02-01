@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Скачиваем официальную статическую сборку Docker CLI
 # Используем версию 29.2.0
-RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-29.2.0.tgz-o /tmp/docker.tgz \
+RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-29.2.0.tgz -o /tmp/docker.tgz \
     && tar xzvf /tmp/docker.tgz -C /tmp \
     && mv /tmp/docker/docker /usr/local/bin/ \
     && chmod +x /usr/local/bin/docker \
