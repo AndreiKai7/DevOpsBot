@@ -1,9 +1,11 @@
 # Используем легкий образ
 FROM python:3.13-slim
 
-# Устанавливаем системные зависимости, если нужны psutil
+# Устанавливаем системные зависимости
+# ДОБАВИЛИ docker.io, чтобы работала команда /ps и /logs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 # Создаем non-root пользователя для безопасности
