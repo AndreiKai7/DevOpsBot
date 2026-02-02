@@ -1,11 +1,12 @@
+import subprocess
+import socket
+import io
 from telegram import Update
 from telegram.ext import ContextTypes
 from bot.config import is_authorized, TELEGRAM_USER_ID
 from bot.logger import setup_logger
 from bot.metrics import get_cpu_usage, get_load_avg, get_ram_usage, get_disk_usage, get_uptime
 from bot.graphs import create_pie_chart
-import subprocess
-import socket  # <--- Добавляем импорт socket
 
 logger = setup_logger()
 
@@ -29,7 +30,20 @@ async def send_server_message(update: Update, text: str, **kwargs):
     header = f"🖥️ *Server: {HOSTNAME}*\n\n"
     await update.message.reply_text(header + text, **kwargs)
 
-# --- Команды БЕЗ имени сервера (общие для всех инстансов) ---
+def check_target(context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Проверяет, предназначена ли команда этому серверу.
+    Логика:
+    - Если аргументов нет -> Команда для ВСЕХ (return True).
+    - Если первый аргумент совпадает с HOSTNAME -> Команда для НАС (return True).
+    - Иначе -> Команда не для нас (return False).
+    """
+    if context.args:
+        target_host = context.args[0]
+        return target_host == HOSTNAME
+    return True
+
+# --- Команды БЕЗ имени сервера (общие) ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
@@ -41,6 +55,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     logger.info(f"User {update.effective_user.id} started the bot.")
 
+async def list_hosts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда обнаружения: каждый сервер в чате отзовется своим именем.
+    """
+    if not await check_access(update): return
+    await update.message.reply_text(f"🖥️ Host Online: *{HOSTNAME}*")
+    logger.info(f"Host {HOSTNAME} responded to /hosts")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает справку по командам."""
     if not await check_access(update): return
@@ -48,26 +70,30 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "🤖 *Доступные команды:*\n\n"
         "🔹 /start - Проверка доступа и запуск бота\n"
-        "🔹 /help - Показать это сообщение\n\n"
+        "🔹 /help - Показать это сообщение\n"
+        "🔹 /hosts - 🌐 Показать список активных серверов\n\n"
         
-        "📊 *Мониторинг & Визуализация:*\n"
-        "🔹 /status - Общая сводка состояния сервера\n"
-        "🔹 /graph - 📈 График использования RAM\n"
-        "🔹 /alerts - Статус активных аномалий\n\n"
-        
-        "🤖 *ChatOps (Управление Docker):*\n"
-        "🔹 /ps - 🐳 Список запущенных контейнеров\n"
-        "🔹 /logs <name> - 📋 Логи контейнера (последние 20 строк)\n"
-        "🔹 /restart <name> - 🔄 Перезагрузка контейнера\n"  # <--- ДОБАВИЛИ ЭТО
-        "🔹 /fix - 🩹 Авто-ремонт (очистка кэша, если диск переполнен)\n\n"
-        
-        "📈 *Точные метрики:*\n"
+        "📊 *Мониторинг (Один или Все):*\n"
+        "🔹 /status - Сводка (если пусто - ВСЕ, если /status server-1 - точечно)\n"
         "🔹 /cpu - Загрузка процессора\n"
-        "🔹 /ram - Использование оперативной памяти\n"
+        "🔹 /ram - Использование памяти\n"
         "🔹 /disk - Использование дискового пространства\n"
         "🔹 /uptime - Время работы сервера\n\n"
         
-        "💡 *Совет:* Нажмите на кнопку меню (☰) слева от поля ввода для быстрого доступа к командам."
+        "🤖 *ChatOps (Управление Docker):*\n"
+        "🔹 /ps - 🐳 Список контейнеров\n"
+        "🔹 /logs <name> - 📋 Логи контейнера (последние 20 строк)\n"
+        "🔹 /dl_logs <name> - 📥 Скачать файл логов (без сохранения на диск)\n"
+        "🔹 /tail <name> - 👀 Мониторинг в реальном времени\n"
+        "🔹 /stop_tail - 🛑 Остановить мониторинг\n"
+        "🔹 /restart <name> - 🔄 Перезагрузка контейнера\n"
+        "🔹 /fix - 🩹 Авто-ремонт (очистка кэша)\n\n"
+        
+        "📈 *Визуализация:*\n"
+        "🔹 /graph - 📈 График использования RAM\n"
+        "🔹 /alerts - Статус активных аномалий\n\n"
+        
+        "💡 *Пример:* `/logs server-1 nginx` покажет логи nginx только на server-1."
     )
     
     await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -77,6 +103,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
+    if not check_target(context): return
 
     cpu = get_cpu_usage()
     load = get_load_avg()
@@ -92,18 +119,17 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💾 Disk: {disk['used_gb']:.2f}GB / {disk['total_gb']:.2f}GB ({disk['percent']}%)\n"
         f"⏳ Uptime: {uptime}"
     )
-    # Используем хелпер
     await send_server_message(update, text, parse_mode="Markdown")
 
 async def graph_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
+    # График обычно запускают для всех или конкретно, но в контексте текущей логики - для текущего
+    if not check_target(context): return
 
     await update.message.reply_text("📊 Generating chart... please wait.")
     
     try:
         image_buffer = create_pie_chart()
-        
-        # Имя сервера добавляем в caption (подпись к фото)
         caption = f"💾 Memory Usage for *{HOSTNAME}*"
         
         await update.message.reply_photo(
@@ -118,13 +144,13 @@ async def graph_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def docker_ps(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
+    if not check_target(context): return
     
     try:
         result = subprocess.run(['docker', 'ps', '--format', 'table {{.Names}}\t{{.Status}}'], 
                                 capture_output=True, text=True)
         
         if result.returncode == 0:
-            # Отправляем список контейнеров с заголовком сервера
             await send_server_message(update, f"🐳 *Docker Containers:*\n```\n{result.stdout}\n```", parse_mode="Markdown")
         else:
             await update.message.reply_text("❌ Error executing docker ps")
@@ -133,39 +159,153 @@ async def docker_ps(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def docker_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
+    if not check_target(context): return
     
-    if not context.args:
-        await update.message.reply_text("Usage: /logs <container_name>")
+    container_name = ""
+    if len(context.args) >= 2:
+        # Формат: /logs server-1 nginx
+        container_name = context.args[1]
+    elif len(context.args) == 1:
+        # Формат: /logs nginx
+        container_name = context.args[0]
+    else:
+        await update.message.reply_text("Usage: /logs <container_name> or /logs <hostname> <container_name>")
         return
-
-    container_name = context.args[0]
     
     try:
         result = subprocess.run(['docker', 'logs', '--tail', '20', container_name], 
                                 capture_output=True, text=True)
-        
         await send_server_message(update, f"📋 *Logs for {container_name}:*\n```\n{result.stdout}\n```", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"❌ Could not fetch logs: {e}")
 
-async def docker_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def docker_download_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
+    if not check_target(context): return
     
-    if not context.args:
-        await update.message.reply_text("Usage: /restart <container_name>")
+    container_name = ""
+    if len(context.args) >= 2:
+        container_name = context.args[1]
+    elif len(context.args) == 1:
+        container_name = context.args[0]
+    else:
+        await update.message.reply_text("Usage: /dl_logs <container_name> or /dl_logs <hostname> <container_name>")
         return
 
-    container_name = context.args[0]
+    await update.message.reply_text(f"📥 Downloading logs for *{container_name}* (last 2000 lines)...", parse_mode="Markdown")
+    
+    try:
+        result = subprocess.run(['docker', 'logs', '--tail', '2000', container_name], 
+                                capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            await update.message.reply_text(f"❌ Error: {result.stderr}")
+            return
+
+        log_data = io.BytesIO(result.stdout.encode('utf-8'))
+        log_data.name = f"{HOSTNAME}_{container_name}_logs.txt"
+        
+        await update.message.reply_document(
+            document=log_data,
+            caption=f"📂 Logs for *{container_name}* (Server: {HOSTNAME}) generated in memory.", 
+            filename=log_data.name,
+            parse_mode="Markdown"
+        )
+        logger.info(f"User downloaded logs for {container_name}")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to generate file: {e}")
+
+async def docker_tail_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update): return
+    if not check_target(context): return
+    
+    container_name = ""
+    if len(context.args) >= 2:
+        container_name = context.args[1]
+    elif len(context.args) == 1:
+        container_name = context.args[0]
+    else:
+        await update.message.reply_text("Usage: /tail <container_name> or /tail <hostname> <container_name>")
+        return
+    
+    user_id = update.effective_user.id
+    job_name = f"tail_{user_id}"
+    
+    current_jobs = context.job_queue.get_jobs_by_name(job_name)
+    if current_jobs:
+        await update.message.reply_text(f"⚠️ You are already monitoring `{container_name}`. Use /stop_tail to stop.")
+        return
+
+    await update.message.reply_text(f"👀 Started watching logs for *{container_name}*.\nI will update you every 10s.", parse_mode="Markdown")
+    
+    # Запускаем фоновую задачу. Передаем HOSTNAME чтобы коллбек знал откуда логи
+    context.job_queue.run_repeating(
+        callback=tail_callback,
+        interval=10, 
+        first=5,
+        data={"name": container_name, "user_id": user_id, "hostname": HOSTNAME},
+        name=job_name
+    )
+
+async def tail_callback(context: ContextTypes.DEFAULT_TYPE):
+    """Функция, которая вызывается каждые 10 секунд."""
+    job_data = context.job.data
+    container_name = job_data['name']
+    current_hostname = job_data['hostname']
+    
+    result = subprocess.run(['docker', 'logs', '--since', '10s', container_name], 
+                            capture_output=True, text=True)
+    
+    if result.stdout:
+        try:
+            # Добавляем HOSTNAME в сообщение логов
+            text = (
+                f"📝 *{current_hostname}* | Logs for `{container_name}`:\n"
+                f"```\n{result.stdout[:3000]}\n```"
+            )
+            await context.bot.send_message(
+                chat_id=job_data['user_id'],
+                text=text,
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send tail update: {e}")
+
+async def docker_tail_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Останавливает мониторинг."""
+    if not await check_access(update): return
+    
+    user_id = update.effective_user.id
+    job_name = f"tail_{user_id}"
+    
+    current_jobs = context.job_queue.get_jobs_by_name(job_name)
+    if current_jobs:
+        current_jobs[0].schedule_removal()
+        await update.message.reply_text("✅ Stopped watching logs.")
+    else:
+        await update.message.reply_text("ℹ️ No active monitoring found.")
+
+async def docker_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update): return
+    if not check_target(context): return
+    
+    container_name = ""
+    if len(context.args) >= 2:
+        container_name = context.args[1]
+    elif len(context.args) == 1:
+        container_name = context.args[0]
+    else:
+        await update.message.reply_text("Usage: /restart <container_name> or /restart <hostname> <container_name>")
+        return
     
     await update.message.reply_text(f"🔄 Restarting container *{container_name}*...", parse_mode="Markdown")
 
     try:
-        # Запускаем рестарт
         result = subprocess.run(['docker', 'restart', container_name], 
                                 capture_output=True, text=True)
         
         if result.returncode == 0:
-            # Если код возврата 0, значит команда прошла успешно
             await send_server_message(update, f"✅ Container *{container_name}* restarted successfully!")
         else:
             await update.message.reply_text(f"❌ Failed to restart. Error: {result.stderr}")
@@ -174,6 +314,7 @@ async def docker_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def fix_disk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
+    if not check_target(context): return
     
     disk = get_disk_usage()
     if disk['percent'] < 90:
@@ -198,24 +339,29 @@ async def fix_disk(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_cpu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
+    if not check_target(context): return
     await send_server_message(update, f"🖥 CPU Usage: {get_cpu_usage()}%")
 
 async def cmd_ram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
+    if not check_target(context): return
     ram = get_ram_usage()
     await send_server_message(update, f"🧠 RAM: {ram['percent']}% ({ram['used_gb']:.2f}GB used)")
 
 async def cmd_disk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
+    if not check_target(context): return
     disk = get_disk_usage()
     await send_server_message(update, f"💾 Disk: {disk['percent']}% ({disk['used_gb']:.2f}GB used)")
 
 async def cmd_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
+    if not check_target(context): return
     await send_server_message(update, f"⏳ Server Uptime: {get_uptime()}")
 
 async def alerts_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
+    if not check_target(context): return
     from bot.alerts import check_alerts
     
     alert_msg = check_alerts(cooldown=0) 

@@ -5,7 +5,9 @@ from bot.config import BOT_TOKEN, CHECK_INTERVAL, ALERT_COOLDOWN, TELEGRAM_USER_
 from bot.logger import setup_logger
 from bot.handlers import (
     start, status, cmd_cpu, cmd_ram, cmd_disk, cmd_uptime, alerts_status, 
-    help_command, graph_command, fix_disk, docker_ps, docker_logs, docker_restart
+    help_command, graph_command, fix_disk, docker_ps, docker_logs, docker_restart,
+    docker_download_logs, docker_tail_start, docker_tail_stop,
+    list_hosts
 )
 from bot.alerts import check_alerts
 
@@ -14,33 +16,33 @@ logger = setup_logger()
 async def setup_bot_commands(application):
     """
     Устанавливает список команд для бота.
-    Это populate и меню по нажатию на '/', и Menu Button (слева от ввода).
     """
     commands = [
         BotCommand("start", "👋 Проверка доступа"),
         BotCommand("help", "❓ Справка"),
-        BotCommand("status", "📊 Сводка сервера"),
-        BotCommand("graph", "📈 График использования RAM"),
-        BotCommand("fix", "🩹 Авто-ремонт (Self-Healing)"),
+        BotCommand("hosts", "🌐 Список хостов"),
+        BotCommand("status", "📊 Сводка (ВСЕ / ИМЯ)"),
+        BotCommand("graph", "📈 График RAM (ВСЕ / ИМЯ)"),
+        BotCommand("fix", "🩹 Ремонт диска (ВСЕ / ИМЯ)"),
+        
         # ChatOps команды
-        BotCommand("ps", "🐳 Список контейнеров"),
-        BotCommand("logs", "📋 Логи контейнера"),
-        BotCommand("restart", "🔄 Рестарт контейнера"),
+        BotCommand("ps", "🐳 Список контейнеров (ВСЕ / ИМЯ)"),
+        BotCommand("logs", "📋 Логи контейнера (ВСЕ / ИМЯ)"),
+        BotCommand("dl_logs", "📥 Скачать логи (ВСЕ / ИМЯ)"),
+        BotCommand("tail", "👀 Мониторинг логов (ВСЕ / ИМЯ)"),
+        BotCommand("stop_tail", "🛑 Остановить мониторинг"),
+        BotCommand("restart", "🔄 Рестарт контейнера (ВСЕ / ИМЯ)"),
+        
         # Метрики
-        BotCommand("cpu", "🖥 Загрузка CPU"),
-        BotCommand("ram", "🧠 Использование RAM"),
-        BotCommand("disk", "💾 Использование диска"),
-        BotCommand("uptime", "⏳ Время работы"),
-        BotCommand("alerts", "🚨 Статус алертов"),
+        BotCommand("cpu", "🖥 Загрузка CPU (ВСЕ / ИМЯ)"),
+        BotCommand("ram", "🧠 Использование RAM (ВСЕ / ИМЯ)"),
+        BotCommand("disk", "💾 Использование диска (ВСЕ / ИМЯ)"),
+        BotCommand("uptime", "⏳ Время работы (ВСЕ / ИМЯ)"),
+        BotCommand("alerts", "🚨 Статус алертов (ВСЕ / ИМЯ)"),
     ]
     
-    # Устанавливаем команды, которые появляются при наборе /
     await application.bot.set_my_commands(commands)
-    
-    # Устанавливаем кнопку меню (Menu Button) слева от поля ввода
-    # При нажатии она показывает список команд, указанных выше
     await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-    
     logger.info("Bot commands and menu button updated.")
 
 async def alarm_job(context: ContextTypes.DEFAULT_TYPE):
@@ -59,16 +61,14 @@ def main():
         logger.critical("BOT_TOKEN is not set in environment variables.")
         return
 
-    # Создаем приложение
     application = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # Запускаем настройку команд (асинхронно)
     application.post_init = setup_bot_commands
     application.post_shutdown = lambda app: logger.info("Bot shutdown.")
 
     # Регистрируем обработчики команд
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("hosts", list_hosts))
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("graph", graph_command))
     application.add_handler(CommandHandler("fix", fix_disk))
@@ -76,8 +76,10 @@ def main():
     # ChatOps обработчики
     application.add_handler(CommandHandler("ps", docker_ps))
     application.add_handler(CommandHandler("logs", docker_logs))
+    application.add_handler(CommandHandler("dl_logs", docker_download_logs))
+    application.add_handler(CommandHandler("tail", docker_tail_start))
+    application.add_handler(CommandHandler("stop_tail", docker_tail_stop))
     application.add_handler(CommandHandler("restart", docker_restart))
-
     
     # Метрики
     application.add_handler(CommandHandler("cpu", cmd_cpu))
@@ -94,8 +96,6 @@ def main():
         logger.error("JobQueue is not initialized.")
 
     logger.info("Bot started successfully.")
-    
-    # Запускаем бота (polling)
     application.run_polling()
 
 if __name__ == "__main__":
