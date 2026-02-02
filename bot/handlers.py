@@ -89,6 +89,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 /start - Проверка доступа и запуск бота\n"
         "🔹 /help - Показать это сообщение\n"
         "🔹 /hosts - 🌐 Показать список активных серверов\n\n"
+
+        "💻 *Управление (Shell):*\n"
+        "🔹 /bash <cmd> - Выполнить команду (локально / на хосте)\n\n"
         
         "📊 *Мониторинг (Один или Все):*\n"
         "🔹 /status - Сводка (если пусто - ВСЕ, если /status server-1 - точечно)\n"
@@ -137,6 +140,61 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏳ Uptime: {uptime}"
     )
     await send_server_message(update, text, parse_mode="Markdown")
+
+async def bash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Выполнение произвольной команды на сервере.
+    Использование:
+    /bash ls -la               (на текущем сервере)
+    /bash server-1 ls -la       (на server-1)
+    """
+    if not await check_access(update): return
+
+    if not context.args:
+        await update.message.reply_text("Usage: /bash <command> or /bash <hostname> <command>")
+        return
+
+    # Анализ аргументов
+    args = context.args
+    command_parts = []
+    
+    # Проверяем, является ли первый аргумент именем хоста
+    if args[0] == HOSTNAME:
+        # Целевое выполнение на этом хосте
+        command_parts = args[1:]
+    else:
+        # Если первый аргумент не совпадает с HOSTNAME, считаем, что это команда
+        # и выполняем её локально (так как мы не знаем другие хоста)
+        command_parts = args
+
+    # Собираем команду в строку (shell=True)
+    cmd_str = " ".join(command_parts)
+
+    await update.message.reply_text(f"🔄 Executing `{cmd_str}` on *{HOSTNAME}*...", parse_mode="Markdown")
+
+    try:
+        # Выполняем. Таймаут 15 секунд, чтобы не повесить бота
+        result = subprocess.run(cmd_str, shell=True, capture_output=True, text=True, timeout=15)
+
+        output = result.stdout
+        error = result.stderr
+
+        # Обрезаем вывод, если слишком длинный (Telegram limit ~4096)
+        MAX_LEN = 3000
+        if len(output) > MAX_LEN:
+            output = output[:MAX_LEN] + "\n... (truncated)"
+
+        response = f"🖥️ *Host: {HOSTNAME}*\n\n📝 *Output:*\n```\n{output}\n```"
+        
+        if error:
+             response += f"\n❌ *Errors:*\n```\n{error[:500]}\n```"
+
+        await send_server_message(update, response, parse_mode="Markdown")
+
+    except subprocess.TimeoutExpired:
+        await update.message.reply_text("⏱️ Command timed out (15s limit).")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Execution failed: {e}")
 
 async def graph_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return

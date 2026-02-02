@@ -7,7 +7,7 @@ from bot.handlers import (
     start, status, cmd_cpu, cmd_ram, cmd_disk, cmd_uptime, alerts_status, 
     help_command, graph_command, fix_disk, docker_ps, docker_logs, docker_restart,
     docker_download_logs, docker_tail_start, docker_tail_stop,
-    list_hosts
+    list_hosts, bash_command
 )
 from bot.alerts import check_alerts
 
@@ -21,6 +21,7 @@ async def setup_bot_commands(application):
         BotCommand("start", "👋 Проверка доступа"),
         BotCommand("help", "❓ Справка"),
         BotCommand("hosts", "🌐 Список хостов"),
+        BotCommand("bash", "💻 Выполнить команду (Shell)"), 
         BotCommand("status", "📊 Сводка (ВСЕ / ИМЯ)"),
         BotCommand("graph", "📈 График RAM (ВСЕ / ИМЯ)"),
         BotCommand("fix", "🩹 Ремонт диска (ВСЕ / ИМЯ)"),
@@ -69,6 +70,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("hosts", list_hosts))
+    application.add_handler(CommandHandler("bash", bash_command))
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("graph", graph_command))
     application.add_handler(CommandHandler("fix", fix_disk))
