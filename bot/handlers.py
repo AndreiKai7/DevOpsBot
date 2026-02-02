@@ -1,6 +1,7 @@
 import subprocess
 import socket
 import io
+import os
 from telegram import Update
 from telegram.ext import ContextTypes
 from bot.config import is_authorized, TELEGRAM_USER_ID
@@ -13,6 +14,21 @@ logger = setup_logger()
 # Определяем имя сервера один раз при старте скрипта
 HOSTNAME = socket.gethostname()
 
+# Определяем IP сервера
+# Приоритет за переменной окружения (.env), если нет - ставим "Unknown"
+SERVER_IP = os.getenv("SERVER_IP", "Unknown")
+
+# Если IP не задан в .env, можно попробовать угадать (но часто это будет IP контейнера)
+if SERVER_IP == "Unknown":
+    logger.warning("SERVER_IP is not set in .env. Trying to auto-detect (might be container IP)...")
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        SERVER_IP = s.getsockname()[0]
+        s.close()
+    except Exception:
+        pass
+
 async def check_access(update: Update) -> bool:
     """ Middleware для проверки доступа."""
     user_id = update.effective_user.id
@@ -24,10 +40,11 @@ async def check_access(update: Update) -> bool:
 
 async def send_server_message(update: Update, text: str, **kwargs):
     """
-    Вспомогательная функция: отправляет сообщение, автоматически добавляя имя сервера.
+    Вспомогательная функция: отправляет сообщение, автоматически добавляя имя сервера и IP.
     Используется для всех команд мониторинга.
     """
-    header = f"🖥️ *Server: {HOSTNAME}*\n\n"
+    # Выводим как: Server: DB-Server (192.168.1.50)
+    header = f"🖥️ *Server: {HOSTNAME} ({SERVER_IP})*\n\n"
     await update.message.reply_text(header + text, **kwargs)
 
 def check_target(context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -57,10 +74,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def list_hosts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Команда обнаружения: каждый сервер в чате отзовется своим именем.
+    Команда обнаружения: каждый сервер в чате отзовется своим именем и IP.
     """
     if not await check_access(update): return
-    await update.message.reply_text(f"🖥️ Host Online: *{HOSTNAME}*")
+    await update.message.reply_text(f"🖥️ Host Online: *{HOSTNAME}* IP: `{SERVER_IP}`", parse_mode="Markdown")
     logger.info(f"Host {HOSTNAME} responded to /hosts")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -123,14 +140,14 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def graph_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
-    # График обычно запускают для всех или конкретно, но в контексте текущей логики - для текущего
     if not check_target(context): return
 
     await update.message.reply_text("📊 Generating chart... please wait.")
     
     try:
         image_buffer = create_pie_chart()
-        caption = f"💾 Memory Usage for *{HOSTNAME}*"
+        # Добавляем IP в подпись к фото
+        caption = f"💾 Memory Usage for *{HOSTNAME}* ({SERVER_IP})"
         
         await update.message.reply_photo(
             photo=image_buffer,
