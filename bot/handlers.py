@@ -5,8 +5,12 @@ from bot.logger import setup_logger
 from bot.metrics import get_cpu_usage, get_load_avg, get_ram_usage, get_disk_usage, get_uptime
 from bot.graphs import create_pie_chart
 import subprocess
+import socket  # <--- Добавляем импорт socket
 
 logger = setup_logger()
+
+# Определяем имя сервера один раз при старте скрипта
+HOSTNAME = socket.gethostname()
 
 async def check_access(update: Update) -> bool:
     """ Middleware для проверки доступа."""
@@ -16,6 +20,16 @@ async def check_access(update: Update) -> bool:
         logger.warning(f"Unauthorized access attempt from ID: {user_id}")
         return False
     return True
+
+async def send_server_message(update: Update, text: str, **kwargs):
+    """
+    Вспомогательная функция: отправляет сообщение, автоматически добавляя имя сервера.
+    Используется для всех команд мониторинга.
+    """
+    header = f"🖥️ *Server: {HOSTNAME}*\n\n"
+    await update.message.reply_text(header + text, **kwargs)
+
+# --- Команды БЕЗ имени сервера (общие для всех инстансов) ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
@@ -44,6 +58,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 *ChatOps (Управление Docker):*\n"
         "🔹 /ps - 🐳 Список запущенных контейнеров\n"
         "🔹 /logs <name> - 📋 Логи контейнера (последние 20 строк)\n"
+        "🔹 /restart <name> - 🔄 Перезагрузка контейнера\n"  # <--- ДОБАВИЛИ ЭТО
         "🔹 /fix - 🩹 Авто-ремонт (очистка кэша, если диск переполнен)\n\n"
         
         "📈 *Точные метрики:*\n"
@@ -58,6 +73,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, parse_mode="Markdown")
     logger.info(f"User {update.effective_user.id} requested help.")
 
+# --- Команды С ИМЕНЕМ СЕРВЕРА (используем send_server_message) ---
+
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
 
@@ -68,14 +85,15 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime = get_uptime()
 
     text = (
-        f"📊 *Server Status*\n\n"
+        f"📊 *Status*\n\n"
         f"🖥 CPU: {cpu}%\n"
         f"⚖ Load: {load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}\n"
         f"🧠 RAM: {ram['used_gb']:.2f}GB / {ram['total_gb']:.2f}GB ({ram['percent']}%)\n"
         f"💾 Disk: {disk['used_gb']:.2f}GB / {disk['total_gb']:.2f}GB ({disk['percent']}%)\n"
         f"⏳ Uptime: {uptime}"
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    # Используем хелпер
+    await send_server_message(update, text, parse_mode="Markdown")
 
 async def graph_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
@@ -83,13 +101,15 @@ async def graph_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📊 Generating chart... please wait.")
     
     try:
-        # Генерируем картинку (это может занять время, в идеале вынести в executor, но пока так)
         image_buffer = create_pie_chart()
         
-        # Отправляем фото прямо из буфера памяти
+        # Имя сервера добавляем в caption (подпись к фото)
+        caption = f"💾 Memory Usage for *{HOSTNAME}*"
+        
         await update.message.reply_photo(
             photo=image_buffer,
-            caption="💾 Current Memory Usage Visualization"
+            caption=caption,
+            parse_mode="Markdown"
         )
         logger.info("Graph sent successfully.")
     except Exception as e:
@@ -99,14 +119,13 @@ async def graph_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def docker_ps(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
     
-    # Запускаем docker ps как будто мы в консоли
     try:
         result = subprocess.run(['docker', 'ps', '--format', 'table {{.Names}}\t{{.Status}}'], 
                                 capture_output=True, text=True)
         
         if result.returncode == 0:
-            # Форматируем моноширинным шрифтом для красоты
-            await update.message.reply_text(f"```\n{result.stdout}\n```", parse_mode="Markdown")
+            # Отправляем список контейнеров с заголовком сервера
+            await send_server_message(update, f"🐳 *Docker Containers:*\n```\n{result.stdout}\n```", parse_mode="Markdown")
         else:
             await update.message.reply_text("❌ Error executing docker ps")
     except Exception as e:
@@ -121,20 +140,41 @@ async def docker_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     container_name = context.args[0]
     
-    # Берем последние 20 строк логов
     try:
         result = subprocess.run(['docker', 'logs', '--tail', '20', container_name], 
                                 capture_output=True, text=True)
         
-        # Логи могут быть длинными, но Телеграм вывозит
-        await update.message.reply_text(f"📋 *Logs for {container_name}:*\n```\n{result.stdout}\n```", parse_mode="Markdown")
+        await send_server_message(update, f"📋 *Logs for {container_name}:*\n```\n{result.stdout}\n```", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"❌ Could not fetch logs: {e}")
+
+async def docker_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update): return
+    
+    if not context.args:
+        await update.message.reply_text("Usage: /restart <container_name>")
+        return
+
+    container_name = context.args[0]
+    
+    await update.message.reply_text(f"🔄 Restarting container *{container_name}*...", parse_mode="Markdown")
+
+    try:
+        # Запускаем рестарт
+        result = subprocess.run(['docker', 'restart', container_name], 
+                                capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            # Если код возврата 0, значит команда прошла успешно
+            await send_server_message(update, f"✅ Container *{container_name}* restarted successfully!")
+        else:
+            await update.message.reply_text(f"❌ Failed to restart. Error: {result.stderr}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
 
 async def fix_disk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
     
-    # Проверяем статус
     disk = get_disk_usage()
     if disk['percent'] < 90:
         await update.message.reply_text("✅ Disk usage is normal. No action needed.")
@@ -146,15 +186,11 @@ async def fix_disk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        # Запускаем очистку
         result = subprocess.run(['docker', 'system', 'prune', '-f'], capture_output=True, text=True)
         
         if result.returncode == 0:
             new_disk = get_disk_usage()
-            await update.message.reply_text(
-                f"✅ Cleanup complete!\n"
-                f"Space reclaimed. New disk usage: {new_disk['percent']}%"
-            )
+            await send_server_message(update, f"✅ Cleanup complete!\nNew disk usage: {new_disk['percent']}%")
         else:
             await update.message.reply_text("❌ Cleanup failed.")
     except Exception as e:
@@ -162,31 +198,29 @@ async def fix_disk(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_cpu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
-    await update.message.reply_text(f"🖥 CPU Usage: {get_cpu_usage()}%")
+    await send_server_message(update, f"🖥 CPU Usage: {get_cpu_usage()}%")
 
 async def cmd_ram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
     ram = get_ram_usage()
-    await update.message.reply_text(f"🧠 RAM: {ram['percent']}% ({ram['used_gb']:.2f}GB used)")
+    await send_server_message(update, f"🧠 RAM: {ram['percent']}% ({ram['used_gb']:.2f}GB used)")
 
 async def cmd_disk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
     disk = get_disk_usage()
-    await update.message.reply_text(f"💾 Disk: {disk['percent']}% ({disk['used_gb']:.2f}GB used)")
+    await send_server_message(update, f"💾 Disk: {disk['percent']}% ({disk['used_gb']:.2f}GB used)")
 
 async def cmd_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
-    await update.message.reply_text(f"⏳ Server Uptime: {get_uptime()}")
+    await send_server_message(update, f"⏳ Server Uptime: {get_uptime()}")
 
 async def alerts_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
-    # Проверяем текущее состояние алертов
     from bot.alerts import check_alerts
-    # Передаем 0 cooldown, чтобы просто проверить, не нарушая таймеры отправки
+    
     alert_msg = check_alerts(cooldown=0) 
     
     if alert_msg:
-        # Вручную подменяем текст, так как check_alerts с 0 вернет сообщение, но мы не хотим обновлять время
-        await update.message.reply_text(f"🚨 *Active Alerts Detected:* \n\n{alert_msg}", parse_mode="Markdown")
+        await send_server_message(update, f"🚨 *Active Alerts:* \n\n{alert_msg}", parse_mode="Markdown")
     else:
-        await update.message.reply_text("✅ No active alerts at the moment.")
+        await send_server_message(update, "✅ No active alerts at the moment.")

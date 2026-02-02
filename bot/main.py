@@ -5,7 +5,7 @@ from bot.config import BOT_TOKEN, CHECK_INTERVAL, ALERT_COOLDOWN, TELEGRAM_USER_
 from bot.logger import setup_logger
 from bot.handlers import (
     start, status, cmd_cpu, cmd_ram, cmd_disk, cmd_uptime, alerts_status, 
-    help_command, graph_command, fix_disk, docker_ps, docker_logs  # <--- Добавили импорт новых функций
+    help_command, graph_command, fix_disk, docker_ps, docker_logs, docker_restart
 )
 from bot.alerts import check_alerts
 
@@ -25,6 +25,7 @@ async def setup_bot_commands(application):
         # ChatOps команды
         BotCommand("ps", "🐳 Список контейнеров"),
         BotCommand("logs", "📋 Логи контейнера"),
+        BotCommand("restart", "🔄 Рестарт контейнера"),
         # Метрики
         BotCommand("cpu", "🖥 Загрузка CPU"),
         BotCommand("ram", "🧠 Использование RAM"),
@@ -75,6 +76,8 @@ def main():
     # ChatOps обработчики
     application.add_handler(CommandHandler("ps", docker_ps))
     application.add_handler(CommandHandler("logs", docker_logs))
+    application.add_handler(CommandHandler("restart", docker_restart))
+
     
     # Метрики
     application.add_handler(CommandHandler("cpu", cmd_cpu))
